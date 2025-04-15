@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status {
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .messages {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+            position: relative;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        .message.sent {
+            background-color: #e3f2fd;
+            margin-left: 20%;
+            border-bottom-right-radius: 0;
+        }
+        .message.received {
+            background-color: #f8f9fa;
+            margin-right: 20%;
+            border-bottom-left-radius: 0;
+        }
+        .message.system {
+            background-color: #fff3cd;
+            text-align: center;
+            margin: 10px 0;
+            padding: 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            color: #856404;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        .message .sender {
+            font-weight: bold;
+            font-size: 0.9em;
+            color: #333;
+            margin-bottom: 4px;
+            padding: 2px 4px;
+            background-color: rgba(255,255,255,0.5);
+            border-radius: 3px;
+            display: inline-block;
+        }
+        .message .timestamp {
+            font-size: 0.7em;
+            color: #666;
+            margin-top: 4px;
+            text-align: right;
+        }
+        .input-area {
+            display: flex;
+            gap: 10px;
+        }
+        #messageInput {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .users-container {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+        }
+        .users-list {
+            list-style-type: none;
+            padding: 0;
+            margin: 0;
+        }
+        .user-item {
+            padding: 8px;
+            margin: 5px 0;
+            background-color: white;
+            border-radius: 4px;
+            border: 1px solid #eee;
+            font-weight: bold;
+            color: #333;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        .layout {
+            display: flex;
+            gap: 20px;
+        }
+        .chat-section {
+            flex: 2;
+        }
+        .users-section {
+            flex: 1;
+        }
+        .users-section h3 {
+            color: #333;
+            margin-bottom: 10px;
+            padding-bottom: 5px;
+            border-bottom: 2px solid #007bff;
+        }
+        .username-section {
+            margin-bottom: 20px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .username-input {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .username-input input {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .username-input button {
+            padding: 8px 16px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WebSocket Test</h1>
+        <div id="status" class="status disconnected">Disconnected</div>
+        <div class="username-section">
+            <h3>Enter Your Name</h3>
+            <div class="username-input">
+                <input type="text" id="usernameInput" placeholder="Type your name..." maxlength="20">
+                <button id="setUsernameButton">Set Name</button>
+            </div>
+        </div>
+        <div class="layout">
+            <div class="chat-section">
+                <div id="messages" class="messages"></div>
+                <div class="input-area">
+                    <input type="text" id="messageInput" placeholder="Type a message..." disabled>
+                    <button id="sendButton" disabled>Send</button>
+                </div>
+            </div>
+            <div class="users-section">
+                <h3>Connected Users</h3>
+                <div class="users-container">
+                    <ul id="usersList" class="users-list"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get the current host's IP address
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = window.location.hostname;
+        const wsPort = window.location.port || '8080';
+        const wsUrl = `${wsProtocol}//${wsHost}:${wsPort}/ws`;
+        
+        const ws = new WebSocket(wsUrl);
+        const status = document.getElementById('status');
+        const messages = document.getElementById('messages');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const usersList = document.getElementById('usersList');
+        const usernameInput = document.getElementById('usernameInput');
+        const setUsernameButton = document.getElementById('setUsernameButton');
+        const usernameSection = document.querySelector('.username-section');
+
+        let userId = '';
+        let connectedUsers = new Set();
+
+        function setUsername() {
+            const username = usernameInput.value.trim();
+            if (username) {
+                userId = username;
+                usernameSection.style.display = 'none';
+                messageInput.disabled = false;
+                sendButton.disabled = false;
+                
+                // Send user join message
+                ws.send(JSON.stringify({
+                    type: 'user_join',
+                    userId: userId
+                }));
+            }
+        }
+
+        setUsernameButton.addEventListener('click', setUsername);
+        usernameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                setUsername();
+            }
+        });
+
+        ws.onopen = () => {
+            status.textContent = 'Connected';
+            status.className = 'status connected';
+            usernameInput.disabled = false;
+            setUsernameButton.disabled = false;
+        };
+
+        ws.onclose = () => {
+            status.textContent = 'Disconnected';
+            status.className = 'status disconnected';
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+            usernameInput.disabled = true;
+            setUsernameButton.disabled = true;
+            connectedUsers.clear();
+            updateUsersList();
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            status.textContent = 'Error occurred';
+            status.className = 'status disconnected';
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'user_list') {
+                    connectedUsers = new Set(data.users);
+                    updateUsersList();
+                } else if (data.type === 'user_join') {
+                    connectedUsers.add(data.userId);
+                    updateUsersList();
+                    addMessage(`${data.userId} joined the chat`, null, false, true);
+                } else if (data.type === 'user_leave') {
+                    connectedUsers.delete(data.userId);
+                    updateUsersList();
+                    addMessage(`${data.userId} left the chat`, null, false, true);
+                } else if (data.type === 'message') {
+                    const isCurrentUser = data.sender === userId;
+                    addMessage(data.text, data.sender, isCurrentUser);
+                } else {
+                    addMessage(event.data, null, false);
+                }
+            } catch (e) {
+                // If message is not JSON, treat as a regular message
+                addMessage(event.data, null, false);
+            }
+        };
+
+        function addMessage(text, sender, isCurrentUser, isSystem = false) {
+            const message = document.createElement('div');
+            if (isSystem) {
+                message.className = 'message system';
+            } else {
+                message.className = `message ${isCurrentUser ? 'sent' : 'received'}`;
+            }
+            
+            if (sender) {
+                const senderElement = document.createElement('div');
+                senderElement.className = 'sender';
+                senderElement.textContent = isCurrentUser ? 'You' : sender;
+                message.appendChild(senderElement);
+            }
+            
+            const textElement = document.createElement('div');
+            textElement.textContent = text;
+            message.appendChild(textElement);
+
+            const timestamp = document.createElement('div');
+            timestamp.className = 'timestamp';
+            timestamp.textContent = new Date().toLocaleTimeString();
+            message.appendChild(timestamp);
+            
+            messages.appendChild(message);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function updateUsersList() {
+            usersList.innerHTML = '';
+            if (connectedUsers.size === 0) {
+                const emptyItem = document.createElement('li');
+                emptyItem.className = 'user-item';
+                emptyItem.textContent = 'No users connected';
+                usersList.appendChild(emptyItem);
+                return;
+            }
+
+            // Create a sorted array of users
+            const sortedUsers = Array.from(connectedUsers).sort();
+            
+            sortedUsers.forEach(connectedUserId => {
+                const userItem = document.createElement('li');
+                userItem.className = 'user-item';
+                // Only show "You" for the current user
+                userItem.textContent = connectedUserId === userId ? 'You' : connectedUserId;
+                usersList.appendChild(userItem);
+            });
+        }
+
+        function sendMessage() {
+            const message = messageInput.value.trim();
+            if (message && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'message',
+                    text: message
+                }));
+                messageInput.value = '';
+            }
+        }
+
+        sendButton.addEventListener('click', sendMessage);
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'user_leave',
+                    userId: userId
+                }));
+            }
+        });
+    </script>
+</body>
+</html> 
