@@ -57,6 +57,7 @@ func main() {
 	authService := service.NewAuthService(userRepo)
 	messageService := service.NewMessageService(messageRepo, messageCache)
 	chatService := service.NewChatService(chatRepo)
+	statusService := service.NewStatusService(rdb) // Initialize status service
 	log.Printf("Services initialized")
 
 	// Initialize handlers
@@ -76,7 +77,7 @@ func main() {
 	router.HandleFunc("/health", transport.HealthCheck).Methods("GET")
 
 	// WebSocket endpoint
-	wsHandler := transport.NewWebSocketHandler()
+	wsHandler := transport.NewWebSocketHandler(statusService) // Pass status service
 	router.HandleFunc("/ws", wsHandler.HandleWebSocket)
 	log.Printf("WebSocket endpoint added")
 
@@ -100,6 +101,19 @@ func main() {
 	messageRouter.HandleFunc("", messageHandler.Send).Methods("POST")
 	messageRouter.HandleFunc("/{messageId}", messageHandler.DeleteMessage).Methods("DELETE")
 	messageRouter.HandleFunc("/chat/{chatId}", messageHandler.GetChatHistory).Methods("GET")
+
+	// Status routes (new)
+	statusRouter := router.PathPrefix("/status").Subrouter()
+	statusRouter.Use(middleware.Auth)
+	statusRouter.HandleFunc("/online", func(w http.ResponseWriter, r *http.Request) {
+		users, err := statusService.GetAllOnlineUsers(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"online_users":` + fmt.Sprintf("%q", users) + `}`))
+	}).Methods("GET")
 
 	// Serve static files from the public directory (must be last)
 	staticRouter := router.PathPrefix("/").Subrouter()
@@ -162,12 +176,6 @@ func connectDB(url string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 	log.Printf("Connected to database")
-
-	// Skip auto-migration since we're using manual migrations
-	// if err := db.AutoMigrate(&model.User{}, &model.Message{}, &model.Chat{}, &model.ChatUser{}); err != nil {
-	//     return nil, fmt.Errorf("failed to migrate database: %w", err)
-	// }
-	// log.Printf("Auto-migrations completed")
 
 	return db, nil
 }

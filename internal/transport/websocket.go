@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -8,23 +9,26 @@ import (
 	"sync/atomic"
 	"time"
 
+	"rtcs/internal/service"
+
 	"github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
 )
 
 const (
-	maxMessageSize = 4096 // 4KB
-	writeWait     = 10 * time.Second
-	pongWait      = 60 * time.Second
-	pingPeriod    = (pongWait * 9) / 10
-	maxConnections = 10000
-	messagesPerSecond = 5 // Rate limit: messages per second per client
+	maxMessageSize    = 4096 // 4KB
+	writeWait         = 10 * time.Second
+	pongWait          = 60 * time.Second
+	pingPeriod        = (pongWait * 9) / 10
+	maxConnections    = 10000
+	messagesPerSecond = 5               // Rate limit: messages per second per client
+	heartbeatInterval = 5 * time.Second // Reduced interval for more frequent updates
+	statusInterval    = 5 * time.Second // How often to broadcast status updates
 )
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	// Allow all origins for debugging purposes
 	CheckOrigin: func(r *http.Request) bool {
 		origin := r.Header.Get("Origin")
 		log.Printf("Accepting WebSocket connection from origin: %s", origin)
@@ -40,49 +44,56 @@ type Client struct {
 	limiter  *rate.Limiter
 	closed   bool
 	closeMux sync.RWMutex
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 type WebSocketHandler struct {
-	clients    map[*Client]bool
-	clientsMux sync.RWMutex
-	broadcast  chan []byte
-	register   chan *Client
-	unregister chan *Client
-	stats      *WebSocketStats
-	shutdown   chan struct{}
-	userIDs    map[string]*Client // Map to track user IDs to clients
+	clients       map[*Client]bool
+	clientsMux    sync.RWMutex
+	broadcast     chan []byte
+	register      chan *Client
+	unregister    chan *Client
+	stats         *WebSocketStats
+	shutdown      chan struct{}
+	userIDs       map[string]*Client
+	knownUsers    map[string]bool // Track all users who have ever connected
+	statusService *service.StatusService
 }
 
 type WebSocketStats struct {
 	ActiveConnections int64
-	MessagesSent     int64
-	MessagesReceived int64
-	Errors           int64
-}
-
-func NewWebSocketHandler() *WebSocketHandler {
-	h := &WebSocketHandler{
-		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte, 256),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		stats:      &WebSocketStats{},
-		shutdown:   make(chan struct{}),
-		userIDs:    make(map[string]*Client),
-	}
-
-	// Start the broadcast handler
-	go h.run()
-
-	return h
+	MessagesSent      int64
+	MessagesReceived  int64
+	Errors            int64
 }
 
 type WebSocketMessage struct {
-	Type   string   `json:"type"`
-	UserID string   `json:"userId,omitempty"`
-	Text   string   `json:"text,omitempty"`
-	Sender string   `json:"sender,omitempty"`
-	Users  []string `json:"users,omitempty"` // Add users field for user list
+	Type     string            `json:"type"`
+	UserID   string            `json:"userId,omitempty"`
+	Text     string            `json:"text,omitempty"`
+	Sender   string            `json:"sender,omitempty"`
+	Users    []string          `json:"users,omitempty"`
+	Status   string            `json:"status,omitempty"`
+	Statuses map[string]string `json:"statuses,omitempty"`
+}
+
+func NewWebSocketHandler(statusService *service.StatusService) *WebSocketHandler {
+	h := &WebSocketHandler{
+		clients:       make(map[*Client]bool),
+		broadcast:     make(chan []byte, 256),
+		register:      make(chan *Client),
+		unregister:    make(chan *Client),
+		stats:         &WebSocketStats{},
+		shutdown:      make(chan struct{}),
+		userIDs:       make(map[string]*Client),
+		knownUsers:    make(map[string]bool), // Initialize knownUsers map
+		statusService: statusService,
+	}
+
+	go h.run()
+	go h.periodicStatusBroadcast()
+	return h
 }
 
 func (h *WebSocketHandler) run() {
@@ -99,6 +110,24 @@ func (h *WebSocketHandler) run() {
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)
 				close(client.send)
+
+				if client.userID != "" {
+					// Remove from active clients but keep in knownUsers
+					delete(h.userIDs, client.userID)
+
+					if h.statusService != nil {
+						ctx := context.Background()
+						if err := h.statusService.SetUserOffline(ctx, client.userID); err != nil {
+							log.Printf("[ERROR] Failed to set user %s offline: %v", client.userID, err)
+						} else {
+							log.Printf("[INFO] Set user %s offline during unregister", client.userID)
+							// Broadcast the status change
+							h.broadcastUserStatus(client.userID, "offline")
+							// Update all clients with the latest user list
+							h.broadcastUserList()
+						}
+					}
+				}
 			}
 			h.clientsMux.Unlock()
 			atomic.AddInt64(&h.stats.ActiveConnections, -1)
@@ -127,32 +156,60 @@ func (h *WebSocketHandler) run() {
 	}
 }
 
+// Periodically broadcast status updates to all clients
+func (h *WebSocketHandler) periodicStatusBroadcast() {
+	ticker := time.NewTicker(statusInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if h.statusService != nil {
+				h.broadcastUserList()
+			}
+		case <-h.shutdown:
+			return
+		}
+	}
+}
+
 func (c *Client) close() {
 	c.closeMux.Lock()
 	defer c.closeMux.Unlock()
 
 	if !c.closed {
 		c.closed = true
+		c.cancel()
 		c.conn.Close()
 	}
 }
 
 func (c *Client) readPump() {
 	defer func() {
-		// If user was identified, notify others about leave
 		if c.userID != "" {
+			// Ensure user is marked as offline when connection closes
+			if c.handler.statusService != nil {
+				ctx := context.Background()
+				if err := c.handler.statusService.SetUserOffline(ctx, c.userID); err != nil {
+					log.Printf("[ERROR] Failed to set user %s offline on disconnect: %v", c.userID, err)
+				} else {
+					log.Printf("[INFO] Set user %s offline on disconnect", c.userID)
+				}
+			}
+
 			c.handler.broadcastMessage(WebSocketMessage{
 				Type:   "user_leave",
 				UserID: c.userID,
+				Status: "offline",
 			})
-			c.handler.clientsMux.Lock()
-			delete(c.handler.userIDs, c.userID)
-			c.handler.clientsMux.Unlock()
+
+			// Update all clients with the latest user list
+			c.handler.broadcastUserList()
 		}
 
 		c.handler.unregister <- c
 		c.close()
-		log.Printf("WebSocket connection closed: %s", c.userID)
+		log.Printf("[INFO] WebSocket connection closed: %s", c.userID)
 	}()
 
 	c.conn.SetReadLimit(maxMessageSize)
@@ -166,25 +223,30 @@ func (c *Client) readPump() {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket error: %v", err)
+				log.Printf("[ERROR] WebSocket error: %v", err)
 				atomic.AddInt64(&c.handler.stats.Errors, 1)
 			}
 			break
 		}
 
-		log.Printf("Received message: %s", string(message))
+		// Update user status on any activity
+		if c.userID != "" && c.handler.statusService != nil {
+			ctx := context.Background()
+			if err := c.handler.statusService.SetUserOnline(ctx, c.userID); err != nil {
+				log.Printf("[ERROR] Failed to refresh user status: %v", err)
+			}
+		}
 
-		// Apply rate limiting
+		log.Printf("[DEBUG] Received message: %s", string(message))
+
 		if !c.limiter.Allow() {
-			log.Printf("Rate limit exceeded for client %s", c.userID)
+			log.Printf("[WARN] Rate limit exceeded for client %s", c.userID)
 			continue
 		}
 
-		// Parse message
 		var wsMsg WebSocketMessage
 		if err := json.Unmarshal(message, &wsMsg); err != nil {
-			log.Printf("Error parsing WebSocket message: %v", err)
-			// If not JSON, treat as regular message
+			log.Printf("[ERROR] Failed to parse WebSocket message: %v", err)
 			c.handler.broadcastMessage(WebSocketMessage{
 				Type: "message",
 				Text: string(message),
@@ -192,36 +254,111 @@ func (c *Client) readPump() {
 			continue
 		}
 
-		// Handle different message types
 		switch wsMsg.Type {
 		case "user_join":
-			log.Printf("User joined: %s", wsMsg.UserID)
+			log.Printf("[INFO] User joined: %s", wsMsg.UserID)
 			c.handler.clientsMux.Lock()
 			c.userID = wsMsg.UserID
 			c.handler.userIDs[wsMsg.UserID] = c
+			c.handler.knownUsers[wsMsg.UserID] = true // Add to known users
 			c.handler.clientsMux.Unlock()
-			// Broadcast the user join to all clients
+
+			// Ensure status is set in Redis
+			if c.handler.statusService != nil {
+				ctx := context.Background()
+				if err := c.handler.statusService.SetUserOnline(ctx, wsMsg.UserID); err != nil {
+					log.Printf("[ERROR] Failed to set user %s online: %v", wsMsg.UserID, err)
+				} else {
+					log.Printf("[INFO] Set user %s online in Redis", wsMsg.UserID)
+				}
+			}
+
+			go c.startHeartbeat()
+
+			// Make sure status is included in the broadcast
+			wsMsg.Status = "online"
 			c.handler.broadcastMessage(wsMsg)
-			// Send user list to the new client
-			c.handler.sendUserList(c)
+
+			// Send updated user list to all clients
+			c.handler.broadcastUserList()
+
 		case "user_leave":
-			log.Printf("User left: %s", wsMsg.UserID)
+			log.Printf("[INFO] User left: %s", wsMsg.UserID)
 			if c.userID != "" {
 				c.handler.clientsMux.Lock()
 				delete(c.handler.userIDs, c.userID)
+				// Keep in knownUsers
 				c.handler.clientsMux.Unlock()
+
+				if c.handler.statusService != nil {
+					ctx := context.Background()
+					if err := c.handler.statusService.SetUserOffline(ctx, c.userID); err != nil {
+						log.Printf("[ERROR] Failed to set user %s offline: %v", c.userID, err)
+					} else {
+						log.Printf("[INFO] Set user %s offline", c.userID)
+					}
+				}
+
+				wsMsg.Status = "offline"
 				c.handler.broadcastMessage(wsMsg)
+
+				// Broadcast updated user list
+				c.handler.broadcastUserList()
 			}
+
 		case "message":
-			log.Printf("Message from %s: %s", c.userID, wsMsg.Text)
+			log.Printf("[INFO] Message from %s: %s", c.userID, wsMsg.Text)
 			wsMsg.Sender = c.userID
+
+			// Update status when sending message
+			if c.handler.statusService != nil {
+				ctx := context.Background()
+				if err := c.handler.statusService.SetUserOnline(ctx, c.userID); err != nil {
+					log.Printf("[ERROR] Failed to refresh user status: %v", err)
+				}
+			}
+
 			c.handler.broadcastMessage(wsMsg)
+
+		case "status_request":
+			log.Printf("[INFO] Status request from %s", c.userID)
+			c.handler.sendUserListWithStatus(c)
+
+		case "heartbeat":
+			log.Printf("[DEBUG] Heartbeat from %s", c.userID)
+			if c.userID != "" && c.handler.statusService != nil {
+				ctx := context.Background()
+				if err := c.handler.statusService.SetUserOnline(ctx, c.userID); err != nil {
+					log.Printf("[ERROR] Failed to refresh user status: %v", err)
+				}
+			}
+
 		default:
-			log.Printf("Unknown message type: %s", wsMsg.Type)
+			log.Printf("[WARN] Unknown message type: %s", wsMsg.Type)
 			c.handler.broadcastMessage(wsMsg)
 		}
 
 		atomic.AddInt64(&c.handler.stats.MessagesReceived, 1)
+	}
+}
+
+func (c *Client) startHeartbeat() {
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if c.userID != "" && c.handler.statusService != nil {
+				log.Printf("[DEBUG] Sending server-side heartbeat for user %s", c.userID)
+				ctx := context.Background()
+				if err := c.handler.statusService.SetUserOnline(ctx, c.userID); err != nil {
+					log.Printf("[ERROR] Failed to refresh user status: %v", err)
+				}
+			}
+		case <-c.ctx.Done():
+			return
+		}
 	}
 }
 
@@ -237,22 +374,19 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// Channel was closed
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
-			// Write message directly
 			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				log.Printf("Error writing message: %v", err)
+				log.Printf("[ERROR] Failed to write message: %v", err)
 				return
 			}
 
-			// Process any pending messages
 			n := len(c.send)
 			for i := 0; i < n; i++ {
 				if err := c.conn.WriteMessage(websocket.TextMessage, <-c.send); err != nil {
-					log.Printf("Error writing queued message: %v", err)
+					log.Printf("[ERROR] Failed to write queued message: %v", err)
 					return
 				}
 			}
@@ -260,73 +394,182 @@ func (c *Client) writePump() {
 		case <-ticker.C:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				log.Printf("Error writing ping: %v", err)
+				log.Printf("[ERROR] Failed to write ping: %v", err)
 				return
 			}
+		case <-c.ctx.Done():
+			return
 		}
 	}
 }
 
 func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if atomic.LoadInt64(&h.stats.ActiveConnections) >= maxConnections {
-		log.Printf("Connection rejected: maximum connections reached")
+		log.Printf("[WARN] Connection rejected: maximum connections reached")
 		http.Error(w, "Too many connections", http.StatusServiceUnavailable)
 		return
 	}
 
-	log.Printf("New WebSocket connection request from %s", r.RemoteAddr)
-	
+	log.Printf("[INFO] New WebSocket connection request from %s", r.RemoteAddr)
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("Failed to upgrade connection: %v", err)
+		log.Printf("[ERROR] Failed to upgrade connection: %v", err)
 		return
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	client := &Client{
 		conn:    conn,
 		send:    make(chan []byte, 256),
 		handler: h,
 		limiter: rate.NewLimiter(rate.Limit(messagesPerSecond), 1),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
-	log.Printf("WebSocket connection established from %s", r.RemoteAddr)
+	log.Printf("[INFO] WebSocket connection established from %s", r.RemoteAddr)
 	h.register <- client
 
-	// Allow collection of memory referenced by the caller by doing all work in
-	// new goroutines.
 	go client.writePump()
 	go client.readPump()
 }
 
 func (h *WebSocketHandler) broadcastMessage(msg WebSocketMessage) {
+	// Update sender status if message has a sender
+	if msg.Sender != "" && h.statusService != nil {
+		ctx := context.Background()
+		if err := h.statusService.SetUserOnline(ctx, msg.Sender); err != nil {
+			log.Printf("[ERROR] Failed to refresh user status: %v", err)
+		}
+	}
+
+	if msg.Type == "heartbeat" {
+		return // Don't broadcast heartbeat messages
+	}
+
 	messageBytes, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("Error marshaling message: %v", err)
+		log.Printf("[ERROR] Failed to marshal message: %v", err)
 		return
 	}
 
-	log.Printf("Broadcasting message: %s", string(messageBytes))
+	log.Printf("[DEBUG] Broadcasting message: %s", string(messageBytes))
 	h.broadcast <- messageBytes
 }
 
-func (h *WebSocketHandler) sendUserList(client *Client) {
+func (h *WebSocketHandler) broadcastUserStatus(userID, status string) {
+	log.Printf("[INFO] Broadcasting status change: user %s is now %s", userID, status)
+	msg := WebSocketMessage{
+		Type:   "status_change",
+		UserID: userID,
+		Status: status,
+	}
+	h.broadcastMessage(msg)
+}
+
+// Broadcast user list to all clients
+func (h *WebSocketHandler) broadcastUserList() {
+	if h.statusService == nil {
+		log.Printf("[WARN] Status service is nil, cannot broadcast user list")
+		return
+	}
+
+	ctx := context.Background()
+
+	// Get all user statuses from Redis
+	statuses, err := h.statusService.GetAllUserStatuses(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get user statuses: %v", err)
+		return
+	}
+
+	// Create a list of all known users
 	h.clientsMux.RLock()
-	users := make([]string, 0, len(h.clients))
-	for c := range h.clients {
-		if c.userID != "" {
-			users = append(users, c.userID)
+	allUsers := make([]string, 0, len(h.knownUsers))
+	for userID := range h.knownUsers {
+		allUsers = append(allUsers, userID)
+
+		// If user is connected, ensure they're marked as online
+		if _, isConnected := h.userIDs[userID]; isConnected {
+			statuses[userID] = "online"
+
+			// Also update Redis to ensure consistency
+			go func(id string) {
+				ctx := context.Background()
+				if err := h.statusService.SetUserOnline(ctx, id); err != nil {
+					log.Printf("[ERROR] Failed to set user %s online during broadcast: %v", id, err)
+				}
+			}(userID)
+		} else if _, hasStatus := statuses[userID]; !hasStatus {
+			// If user is not connected and has no status, mark as offline
+			statuses[userID] = "offline"
 		}
 	}
 	h.clientsMux.RUnlock()
 
-	log.Printf("Sending user list: %v", users)
+	log.Printf("[INFO] Broadcasting user list with %d users and %d statuses", len(allUsers), len(statuses))
+	log.Printf("[DEBUG] User statuses: %v", statuses)
+
 	msg := WebSocketMessage{
-		Type:  "user_list",
-		Users: users,
+		Type:     "user_list",
+		Users:    allUsers,
+		Statuses: statuses,
 	}
+
 	msgBytes, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("Error marshaling user list: %v", err)
+		log.Printf("[ERROR] Failed to marshal user list: %v", err)
+		return
+	}
+
+	h.broadcast <- msgBytes
+}
+
+func (h *WebSocketHandler) sendUserListWithStatus(client *Client) {
+	if h.statusService == nil {
+		log.Printf("[WARN] Status service is nil, cannot send user list")
+		return
+	}
+
+	ctx := context.Background()
+
+	// Get all user statuses from Redis
+	statuses, err := h.statusService.GetAllUserStatuses(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get user statuses: %v", err)
+		return
+	}
+
+	// Create a list of all known users
+	h.clientsMux.RLock()
+	allUsers := make([]string, 0, len(h.knownUsers))
+	for userID := range h.knownUsers {
+		allUsers = append(allUsers, userID)
+
+		// If user is connected, ensure they're marked as online
+		if _, isConnected := h.userIDs[userID]; isConnected {
+			statuses[userID] = "online"
+		} else if _, hasStatus := statuses[userID]; !hasStatus {
+			// If user is not connected and has no status, mark as offline
+			statuses[userID] = "offline"
+		}
+	}
+	h.clientsMux.RUnlock()
+
+	log.Printf("[INFO] Sending user list to client %s: %d users, %d statuses",
+		client.userID, len(allUsers), len(statuses))
+
+	msg := WebSocketMessage{
+		Type:     "user_list",
+		Users:    allUsers,
+		Statuses: statuses,
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal user list: %v", err)
 		return
 	}
 
