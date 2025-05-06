@@ -329,6 +329,11 @@ func (c *Client) readPump() {
 			log.Printf("[INFO] Status request from %s", c.userID)
 			c.handler.sendUserListWithStatus(c)
 
+		case "profile_update":
+			log.Printf("[INFO] Profile update from %s", c.userID)
+			// Broadcast the profile update to all clients
+			c.handler.broadcastMessage(wsMsg)
+
 		case "heartbeat":
 			log.Printf("[DEBUG] Heartbeat from %s", c.userID)
 			if c.userID != "" && c.handler.statusService != nil {
