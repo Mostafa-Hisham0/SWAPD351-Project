@@ -58,10 +58,12 @@ func main() {
 	messageService := service.NewMessageService(messageRepo, messageCache)
 	chatService := service.NewChatService(chatRepo)
 	statusService := service.NewStatusService(rdb) // Initialize status service
+	profileService := service.NewProfileService(userRepo)
 	log.Printf("Services initialized")
 
 	// Initialize handlers
 	authHandler := transport.NewAuthHandler(authService)
+	profileHandler := transport.NewProfileHandler(profileService)
 	messageHandler := transport.NewMessageHandler(messageService)
 	chatHandler := transport.NewChatHandler(chatService)
 
@@ -77,8 +79,11 @@ func main() {
 	router.HandleFunc("/health", transport.HealthCheck).Methods("GET")
 
 	// WebSocket endpoint
-	wsHandler := transport.NewWebSocketHandler(statusService) // Pass status service
+	wsHandler := transport.NewWebSocketHandler(statusService, profileService) // Pass status service
 	router.HandleFunc("/ws", wsHandler.HandleWebSocket)
+	router.HandleFunc("/api/profile", profileHandler.GetMyProfile).Methods("GET")
+	router.HandleFunc("/api/profile", profileHandler.UpdateProfile).Methods("PUT")
+	router.HandleFunc("/api/users/{userId}/profile", profileHandler.GetProfile).Methods("GET")
 	log.Printf("WebSocket endpoint added")
 
 	// Auth routes

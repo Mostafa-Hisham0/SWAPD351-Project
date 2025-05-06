@@ -7,14 +7,36 @@ import (
 	"gorm.io/gorm"
 )
 
-// User represents a user in the system
 type User struct {
-	ID        uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	DeletedAt *time.Time `gorm:"index" json:"deleted_at,omitempty"`
-	Username  string     `gorm:"unique;not null" json:"username"`
-	Password  string     `json:"-"` // Hidden from JSON
+	ID          uuid.UUID  `json:"id" gorm:"primaryKey;type:uuid;default:uuid_generate_v4()"`
+	CreatedAt   time.Time  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
+	DeletedAt   *time.Time `json:"-" gorm:"index"`
+	Username    string     `json:"username" gorm:"uniqueIndex;not null"`
+	Password    string     `json:"-" gorm:"not null"` // Don't expose password in JSON
+	DisplayName string     `json:"display_name" gorm:"type:varchar(255)"`
+	AvatarURL   string     `json:"avatar_url" gorm:"type:varchar(512)"`
+	About       string     `json:"about" gorm:"type:text"`
+}
+
+// UserProfile represents the public profile of a user
+type UserProfile struct {
+	ID          uuid.UUID `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+	AvatarURL   string    `json:"avatar_url"`
+	About       string    `json:"about"`
+}
+
+// ToProfile converts a User to a UserProfile
+func (u *User) ToProfile() *UserProfile {
+	return &UserProfile{
+		ID:          u.ID,
+		Username:    u.Username,
+		DisplayName: u.DisplayName,
+		AvatarURL:   u.AvatarURL,
+		About:       u.About,
+	}
 }
 
 // BeforeCreate is called before creating a new user

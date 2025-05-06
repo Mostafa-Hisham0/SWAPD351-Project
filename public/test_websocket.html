@@ -29,6 +29,49 @@
             text-align: center;
             font-weight: bold;
         }
+        .profile-section {
+    grid-column: 1 / -1;
+    padding: 15px;
+    background-color: #f5f5f5;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.profile-form {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.form-group label {
+    font-weight: 500;
+    color: #333;
+}
+
+.form-group input, .form-group textarea {
+    padding: 10px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 1em;
+}
+
+.form-group textarea {
+    min-height: 100px;
+    resize: vertical;
+}
+
+.user-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+}
         .connected {
             background-color: #e6f7e6;
             color: #2e7d32;
@@ -252,6 +295,25 @@
                 <li class="empty-users">No users connected</li>
             </ul>
         </div>
+
+        <div class="profile-section">
+            <h3>My Profile</h3>
+            <div class="profile-form">
+                <div class="form-group">
+                    <label for="displayName">Display Name</label>
+                    <input type="text" id="displayName" placeholder="Your display name">
+                </div>
+                <div class="form-group">
+                    <label for="avatarUrl">Avatar URL</label>
+                    <input type="text" id="avatarUrl" placeholder="URL to your avatar image">
+                </div>
+                <div class="form-group">
+                    <label for="about">About</label>
+                    <textarea id="about" placeholder="Tell us about yourself"></textarea>
+                </div>
+                <button id="updateProfileButton">Update Profile</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -290,6 +352,7 @@
             connectedUsers: new Set(),  // Currently connected users
             allUsers: new Set(),        // All users who have ever joined
             userStatuses: {},           // Status of all users
+            userProfiles: {}, 
             typingUsers: new Set(),
             typingTimeout: null,
             connected: false
@@ -389,11 +452,10 @@
 
             // Typing indicator
             elements.messageInput.addEventListener('input', handleTyping);
-
+            document.getElementById('updateProfileButton').addEventListener('click', updateProfile);
             // Window events
             window.addEventListener('beforeunload', handleBeforeUnload);
         }
-
         // Process different types of incoming messages
         function processIncomingMessage(data) {
             switch(data.type) {
@@ -445,6 +507,10 @@
             
             if (data.statuses) {
                 state.userStatuses = data.statuses;
+            }
+
+            if (data.profiles) {
+                state.userProfiles = data.profiles;
             }
             
             updateUserList();
@@ -567,6 +633,8 @@
                 
                 // Add system message
                 addSystemMessage(`You joined as ${username}`);
+
+                loadMyProfile();
             }
         }
 
@@ -725,66 +793,118 @@
             scrollToBottom();
         }
 
-        // Update the user list UI
-        function updateUserList() {
-            console.log("Updating user list with statuses:", state.userStatuses);
-            elements.usersList.innerHTML = '';
-            
-            if (state.allUsers.size === 0) {
-                const emptyItem = document.createElement('li');
-                emptyItem.className = 'empty-users';
-                emptyItem.textContent = 'No users connected';
-                elements.usersList.appendChild(emptyItem);
-                return;
-            }
-
-            // Sort users: online first, then alphabetically
-            const sortedUsers = Array.from(state.allUsers).sort((a, b) => {
-                const statusA = state.userStatuses[a] || 'offline';
-                const statusB = state.userStatuses[b] || 'offline';
-                
-                // Online users first
-                if (statusA === 'online' && statusB !== 'online') return -1;
-                if (statusA !== 'online' && statusB === 'online') return 1;
-                
-                // Then current user
-                if (a === state.userId) return -1;
-                if (b === state.userId) return 1;
-                
-                // Then alphabetically
-                return a.localeCompare(b);
-            });
-
-            sortedUsers.forEach(userId => {
-                const userItem = document.createElement('li');
-                userItem.className = 'user-item';
-                
-                const userInfo = document.createElement('div');
-                userInfo.className = 'user-info';
-                
-                const statusIndicator = document.createElement('div');
-                statusIndicator.className = 'status-indicator';
-                
-                // Get user status (default to offline)
-                const status = state.userStatuses[userId] || 'offline';
-                statusIndicator.classList.add(`status-${status}`);
-                
-                const username = document.createElement('span');
-                username.className = 'username';
-                username.textContent = userId === state.userId ? 'You' : userId;
-                
-                userInfo.appendChild(statusIndicator);
-                userInfo.appendChild(username);
-                
-                const statusText = document.createElement('span');
-                statusText.className = 'user-status';
-                statusText.textContent = status.charAt(0).toUpperCase() + status.slice(1);
-                
-                userItem.appendChild(userInfo);
-                userItem.appendChild(statusText);
-                elements.usersList.appendChild(userItem);
-            });
+        function loadMyProfile() {
+    fetch('/api/profile', {
+        headers: {
+            'Authorization': 'Bearer ' + localStorage.getItem('token')
         }
+    })
+    .then(response => response.json())
+    .then(profile => {
+        document.getElementById('displayName').value = profile.display_name || '';
+        document.getElementById('avatarUrl').value = profile.avatar_url || '';
+        document.getElementById('about').value = profile.about || '';
+    })
+    .catch(error => console.error('Error loading profile:', error));
+}
+
+function updateProfile() {
+    const profile = {
+        display_name: document.getElementById('displayName').value,
+        avatar_url: document.getElementById('avatarUrl').value,
+        about: document.getElementById('about').value
+    };
+    
+    fetch('/api/profile', {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + localStorage.getItem('token')
+        },
+        body: JSON.stringify(profile)
+    })
+    .then(response => response.json())
+    .then(updatedProfile => {
+        console.log('Profile updated:', updatedProfile);
+        // Maybe update UI or show a success message
+    })
+    .catch(error => console.error('Error updating profile:', error));
+}
+
+        // Update the user list UI
+    function updateUserList() {
+        console.log("Updating user list with statuses:", state.userStatuses);
+        elements.usersList.innerHTML = '';
+    
+    if (state.allUsers.size === 0) {
+        const emptyItem = document.createElement('li');
+        emptyItem.className = 'empty-users';
+        emptyItem.textContent = 'No users connected';
+        elements.usersList.appendChild(emptyItem);
+        return;
+    }
+
+    // Sort users: online first, then alphabetically
+    const sortedUsers = Array.from(state.allUsers).sort((a, b) => {
+        const statusA = state.userStatuses[a] || 'offline';
+        const statusB = state.userStatuses[b] || 'offline';
+        
+        // Online users first
+        if (statusA === 'online' && statusB !== 'online') return -1;
+        if (statusA !== 'online' && statusB === 'online') return 1;
+        
+        // Then current user
+        if (a === state.userId) return -1;
+        if (b === state.userId) return 1;
+        
+        // Then alphabetically
+        return a.localeCompare(b);
+    });
+
+    sortedUsers.forEach(userId => {
+        const userItem = document.createElement('li');
+        userItem.className = 'user-item';
+        
+        const userInfo = document.createElement('div');
+        userInfo.className = 'user-info';
+        
+        const statusIndicator = document.createElement('div');
+        statusIndicator.className = 'status-indicator';
+        
+        // Get user status (default to offline)
+        const status = state.userStatuses[userId] || 'offline';
+        statusIndicator.classList.add(`status-${status}`);
+        
+        const username = document.createElement('span');
+        username.className = 'username';
+        
+        // Use display name from profile if available
+        const profile = state.userProfiles && state.userProfiles[userId];
+        const displayName = profile && profile.display_name ? profile.display_name : userId;
+        username.textContent = userId === state.userId ? 'You' : displayName;
+        
+        userInfo.appendChild(statusIndicator);
+        userInfo.appendChild(username);
+        
+        const statusText = document.createElement('span');
+        statusText.className = 'user-status';
+        statusText.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+        
+        userItem.appendChild(userInfo);
+        userItem.appendChild(statusText);
+        
+        // Add avatar if available
+        if (profile && profile.avatar_url) {
+            const avatar = document.createElement('img');
+            avatar.className = 'user-avatar';
+            avatar.src = profile.avatar_url;
+            avatar.alt = displayName;
+            userInfo.insertBefore(avatar, username);
+        }
+        
+        elements.usersList.appendChild(userItem);
+    });
+}
 
         // Update online users count
         function updateOnlineCount() {

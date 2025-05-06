@@ -43,3 +43,33 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*m
 	}
 	return &user, nil
 }
+
+// UpdateProfile updates a user's profile information
+func (r *UserRepository) UpdateProfile(ctx context.Context, id uuid.UUID, profile *model.UserProfile) error {
+	return r.db.WithContext(ctx).Model(&model.User{}).
+		Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"display_name": profile.DisplayName,
+			"avatar_url":   profile.AvatarURL,
+			"about":        profile.About,
+		}).Error
+}
+
+// GetProfiles retrieves profiles for multiple users
+func (r *UserRepository) GetProfiles(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]*model.UserProfile, error) {
+	var users []model.User
+	err := r.db.WithContext(ctx).
+		Where("id IN ?", userIDs).
+		Find(&users).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	profiles := make(map[uuid.UUID]*model.UserProfile)
+	for _, user := range users {
+		profiles[user.ID] = user.ToProfile()
+	}
+
+	return profiles, nil
+}

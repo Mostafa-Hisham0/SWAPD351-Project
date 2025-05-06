@@ -9,8 +9,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"rtcs/internal/model"
 	"rtcs/internal/service"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"golang.org/x/time/rate"
 )
@@ -49,16 +51,17 @@ type Client struct {
 }
 
 type WebSocketHandler struct {
-	clients       map[*Client]bool
-	clientsMux    sync.RWMutex
-	broadcast     chan []byte
-	register      chan *Client
-	unregister    chan *Client
-	stats         *WebSocketStats
-	shutdown      chan struct{}
-	userIDs       map[string]*Client
-	knownUsers    map[string]bool // Track all users who have ever connected
-	statusService *service.StatusService
+	clients        map[*Client]bool
+	clientsMux     sync.RWMutex
+	broadcast      chan []byte
+	register       chan *Client
+	unregister     chan *Client
+	stats          *WebSocketStats
+	shutdown       chan struct{}
+	userIDs        map[string]*Client
+	knownUsers     map[string]bool // Track all users who have ever connected
+	statusService  *service.StatusService
+	profileService *service.ProfileService
 }
 
 type WebSocketStats struct {
@@ -69,26 +72,28 @@ type WebSocketStats struct {
 }
 
 type WebSocketMessage struct {
-	Type     string            `json:"type"`
-	UserID   string            `json:"userId,omitempty"`
-	Text     string            `json:"text,omitempty"`
-	Sender   string            `json:"sender,omitempty"`
-	Users    []string          `json:"users,omitempty"`
-	Status   string            `json:"status,omitempty"`
-	Statuses map[string]string `json:"statuses,omitempty"`
+	Type     string                        `json:"type"`
+	UserID   string                        `json:"userId,omitempty"`
+	Text     string                        `json:"text,omitempty"`
+	Sender   string                        `json:"sender,omitempty"`
+	Users    []string                      `json:"users,omitempty"`
+	Status   string                        `json:"status,omitempty"`
+	Statuses map[string]string             `json:"statuses,omitempty"`
+	Profiles map[string]*model.UserProfile `json:"profiles,omitempty"`
 }
 
-func NewWebSocketHandler(statusService *service.StatusService) *WebSocketHandler {
+func NewWebSocketHandler(statusService *service.StatusService, profileService *service.ProfileService) *WebSocketHandler {
 	h := &WebSocketHandler{
-		clients:       make(map[*Client]bool),
-		broadcast:     make(chan []byte, 256),
-		register:      make(chan *Client),
-		unregister:    make(chan *Client),
-		stats:         &WebSocketStats{},
-		shutdown:      make(chan struct{}),
-		userIDs:       make(map[string]*Client),
-		knownUsers:    make(map[string]bool), // Initialize knownUsers map
-		statusService: statusService,
+		clients:        make(map[*Client]bool),
+		broadcast:      make(chan []byte, 256),
+		register:       make(chan *Client),
+		unregister:     make(chan *Client),
+		stats:          &WebSocketStats{},
+		shutdown:       make(chan struct{}),
+		userIDs:        make(map[string]*Client),
+		knownUsers:     make(map[string]bool), // Initialize knownUsers map
+		statusService:  statusService,
+		profileService: profileService,
 	}
 
 	go h.run()
@@ -437,7 +442,6 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *WebSocketHandler) broadcastMessage(msg WebSocketMessage) {
-	// Update sender status if message has a sender
 	if msg.Sender != "" && h.statusService != nil {
 		ctx := context.Background()
 		if err := h.statusService.SetUserOnline(ctx, msg.Sender); err != nil {
@@ -457,6 +461,7 @@ func (h *WebSocketHandler) broadcastMessage(msg WebSocketMessage) {
 
 	log.Printf("[DEBUG] Broadcasting message: %s", string(messageBytes))
 	h.broadcast <- messageBytes
+
 }
 
 func (h *WebSocketHandler) broadcastUserStatus(userID, status string) {
@@ -488,34 +493,41 @@ func (h *WebSocketHandler) broadcastUserList() {
 	// Create a list of all known users
 	h.clientsMux.RLock()
 	allUsers := make([]string, 0, len(h.knownUsers))
-	for userID := range h.knownUsers {
-		allUsers = append(allUsers, userID)
+	userIDs := make([]uuid.UUID, 0, len(h.knownUsers))
 
-		// If user is connected, ensure they're marked as online
-		if _, isConnected := h.userIDs[userID]; isConnected {
-			statuses[userID] = "online"
+	for userIDStr := range h.knownUsers {
+		allUsers = append(allUsers, userIDStr)
 
-			// Also update Redis to ensure consistency
-			go func(id string) {
-				ctx := context.Background()
-				if err := h.statusService.SetUserOnline(ctx, id); err != nil {
-					log.Printf("[ERROR] Failed to set user %s online during broadcast: %v", id, err)
-				}
-			}(userID)
-		} else if _, hasStatus := statuses[userID]; !hasStatus {
-			// If user is not connected and has no status, mark as offline
-			statuses[userID] = "offline"
+		// Convert string to UUID for profile lookup
+		userID, err := uuid.Parse(userIDStr)
+		if err == nil {
+			userIDs = append(userIDs, userID)
 		}
 	}
 	h.clientsMux.RUnlock()
 
-	log.Printf("[INFO] Broadcasting user list with %d users and %d statuses", len(allUsers), len(statuses))
-	log.Printf("[DEBUG] User statuses: %v", statuses)
+	// Get profiles for all users
+	profiles := make(map[string]*model.UserProfile)
+	if h.profileService != nil && len(userIDs) > 0 {
+		userProfiles, err := h.profileService.GetProfiles(ctx, userIDs)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get user profiles: %v", err)
+		} else {
+			// Convert UUID keys to string keys for JSON
+			for id, profile := range userProfiles {
+				profiles[id.String()] = profile
+			}
+		}
+	}
+
+	log.Printf("[INFO] Broadcasting user list with %d users, %d statuses, and %d profiles",
+		len(allUsers), len(statuses), len(profiles))
 
 	msg := WebSocketMessage{
 		Type:     "user_list",
 		Users:    allUsers,
 		Statuses: statuses,
+		Profiles: profiles, // Add profiles to the message
 	}
 
 	msgBytes, err := json.Marshal(msg)
