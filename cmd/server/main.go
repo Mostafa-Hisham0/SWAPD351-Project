@@ -170,13 +170,13 @@ func main() {
 
 	// Create server
 	srv := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":8083",
 		Handler: router,
 	}
 
 	// Start server
 	go func() {
-		log.Printf("Server is running on port 8080")
+		log.Printf("Server is running on port 8083")
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
