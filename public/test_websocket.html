@@ -21,6 +21,29 @@
             padding: 20px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
+        .header {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background-color: #f5f5f5;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .sign-out-btn {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.3s;
+        }
+        .sign-out-btn:hover {
+            background-color: #c82333;
+        }
         .status {
             grid-column: 1 / -1;
             padding: 12px;
@@ -364,6 +387,10 @@
 </head>
 <body>
     <div class="container">
+        <div class="header">
+            <h2>Real-Time Chat</h2>
+            <button id="signOutButton" class="sign-out-btn">Sign Out</button>
+        </div>
         <div id="status" class="status disconnected">Disconnected from server</div>
         
         <div class="username-section">
@@ -555,6 +582,18 @@
                     });            
             // Window events
             window.addEventListener('beforeunload', handleBeforeUnload);
+            document.getElementById('signOutButton').addEventListener('click', function() {
+                // Clear local storage
+                localStorage.removeItem('token');
+                
+                // Close WebSocket connection if it exists
+                if (ws) {
+                    ws.close();
+                }
+                
+                // Redirect to the main page
+                window.location.href = '/';
+            });
         }
         // Process different types of incoming messages
         function processIncomingMessage(data) {
