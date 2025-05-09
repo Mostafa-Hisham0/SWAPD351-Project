@@ -34,6 +34,35 @@ type LoginResponse struct {
 	Token string `json:"token"`
 }
 
+// GetOrCreateGoogleUser gets or creates a user from Google OAuth data
+func (s *AuthService) GetOrCreateGoogleUser(ctx context.Context, email, name, picture string) (*model.User, error) {
+	// Try to get existing user by email
+	user, err := s.userRepo.GetByEmail(ctx, email)
+	if err == nil && user != nil {
+		return user, nil
+	}
+
+	// Create new user if not found
+	user = &model.User{
+		Email:    email,
+		Username: email, // Use email as username for now
+		Name:     name,
+		Picture:  picture,
+		AuthType: "google",
+	}
+
+	if err := s.userRepo.Create(ctx, user); err != nil {
+		return nil, err
+	}
+
+	return user, nil
+}
+
+// GenerateToken generates a JWT token for a user
+func (s *AuthService) GenerateToken(userID string) (string, error) {
+	return middleware.GenerateToken(userID)
+}
+
 // Login authenticates a user and returns a JWT token
 func (s *AuthService) Login(ctx context.Context, username, password string) (string, error) {
 	// Get user by username

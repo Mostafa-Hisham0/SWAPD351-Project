@@ -16,13 +16,29 @@ var (
 	once   sync.Once
 )
 
+func isDocker() bool {
+	return os.Getenv("DOCKER_ENV") == "true"
+}
+
 func Get() *Config {
 	once.Do(func() {
-		// In Docker environments, use the service names defined in docker-compose.yml
-		// For local development, default to localhost
+		// Determine the database connection based on environment
+		var dbURL string
+		if isDocker() {
+			dbURL = "postgres://postgres:postgres123@postgres:5432/rtcs?sslmode=disable"
+		} else {
+			dbURL = "postgres://postgres:wendy@localhost:5432/rtcs?sslmode=disable"
+		}
+
+		// Determine the Redis host based on environment
+		redisHost := "localhost"
+		if isDocker() {
+			redisHost = "redis"
+		}
+
 		config = &Config{
-			DatabaseURL: getEnv("DATABASE_URL", "postgres://postgres:postgres123@postgres:5432/rtcs?sslmode=disable"),
-			RedisURL:    getEnv("REDIS_URL", "redis://redis:6379/0"),
+			DatabaseURL: getEnv("DATABASE_URL", dbURL),
+			RedisURL:    getEnv("REDIS_URL", "redis://"+redisHost+":6379/0"),
 			JWTSecret:   getEnv("JWT_SECRET", "rtcs-secure-jwt-secret-key-2024"),
 		}
 	})

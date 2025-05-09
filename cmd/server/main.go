@@ -13,6 +13,7 @@ import (
 	"rtcs/internal/repository"
 	"rtcs/internal/service"
 	"rtcs/internal/transport"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +34,13 @@ func main() {
 	cfg := config.Get()
 	log.Printf("Configuration loaded")
 
+	// Load OAuth configuration
+	oauthCfg, err := config.LoadOAuthConfig()
+	if err != nil {
+		log.Fatalf("Failed to load OAuth configuration: %v", err)
+	}
+	log.Printf("OAuth configuration loaded")
+
 	// Connect to PostgreSQL
 	db, err := connectDB(cfg.DatabaseURL)
 	if err != nil {
@@ -47,8 +55,16 @@ func main() {
 	log.Printf("Repositories initialized")
 
 	// Connect to Redis
+	redisURL := cfg.RedisURL
+	if strings.HasPrefix(redisURL, "redis://") {
+		redisURL = strings.TrimPrefix(redisURL, "redis://")
+	}
+	// Remove database number if present
+	if idx := strings.LastIndex(redisURL, "/"); idx != -1 {
+		redisURL = redisURL[:idx]
+	}
 	rdb := redis.NewClient(&redis.Options{
-		Addr: cfg.RedisURL,
+		Addr: redisURL,
 	})
 	messageCache := cache.NewMessageCache(rdb)
 	log.Printf("Connected to Redis")
@@ -66,6 +82,7 @@ func main() {
 	profileHandler := transport.NewProfileHandler(profileService)
 	messageHandler := transport.NewMessageHandler(messageService)
 	chatHandler := transport.NewChatHandler(chatService)
+	oauthHandler := transport.NewOAuthHandler(oauthCfg, authService)
 
 	// Create router
 	router := mux.NewRouter()
@@ -77,6 +94,10 @@ func main() {
 
 	// Health check endpoint
 	router.HandleFunc("/health", transport.HealthCheck).Methods("GET")
+
+	// OAuth routes
+	router.HandleFunc("/auth/google/login", oauthHandler.GoogleLogin).Methods("GET")
+	router.HandleFunc("/auth/google/callback", oauthHandler.GoogleCallback).Methods("GET")
 
 	// WebSocket endpoint
 	wsHandler := transport.NewWebSocketHandler(statusService, profileService) // Pass status service
@@ -122,6 +143,10 @@ func main() {
 
 	// Serve static files from the public directory (must be last)
 	staticRouter := router.PathPrefix("/").Subrouter()
+	// Serve index.html for root path
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "public/index.html")
+	})
 	staticRouter.PathPrefix("/").Handler(http.FileServer(http.Dir("public")))
 
 	// Log all registered routes

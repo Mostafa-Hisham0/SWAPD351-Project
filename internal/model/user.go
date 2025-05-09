@@ -17,6 +17,10 @@ type User struct {
 	DisplayName string     `json:"display_name" gorm:"type:varchar(255)"`
 	AvatarURL   string     `json:"avatar_url" gorm:"type:varchar(512)"`
 	About       string     `json:"about" gorm:"type:text"`
+	Email       string     `gorm:"unique"`
+	Name        string
+	Picture     string
+	AuthType    string `gorm:"default:'local'"`
 }
 
 // UserProfile represents the public profile of a user

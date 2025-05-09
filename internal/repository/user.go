@@ -73,3 +73,11 @@ func (r *UserRepository) GetProfiles(ctx context.Context, userIDs []uuid.UUID) (
 
 	return profiles, nil
 }
+
+func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
+	var user model.User
+	if err := r.db.Where("email = ?", email).First(&user).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
