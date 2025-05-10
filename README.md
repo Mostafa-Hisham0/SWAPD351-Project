@@ -296,7 +296,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Project Team
 
-- [Mostafa-Hisham0](https://github.com/Mostafa-Hisham0) - Lead Developer
+- [Mostafa-Hisham0](https://github.com/Mostafa-Hisham0) 
 
 ---
 
