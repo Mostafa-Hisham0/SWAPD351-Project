@@ -3,23 +3,27 @@ package service
 import (
 	"context"
 	"errors"
-	"rtcs/internal/middleware"
 	"rtcs/internal/model"
 	"rtcs/internal/repository"
 
+	"time"
+
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // AuthService handles user authentication
 type AuthService struct {
-	userRepo *repository.UserRepository
+	userRepo  *repository.UserRepository
+	jwtSecret []byte
 }
 
 // NewAuthService creates a new authentication service
-func NewAuthService(userRepo *repository.UserRepository) *AuthService {
+func NewAuthService(userRepo *repository.UserRepository, jwtSecret string) *AuthService {
 	return &AuthService{
-		userRepo: userRepo,
+		userRepo:  userRepo,
+		jwtSecret: []byte(jwtSecret),
 	}
 }
 
@@ -60,7 +64,15 @@ func (s *AuthService) GetOrCreateGoogleUser(ctx context.Context, email, name, pi
 
 // GenerateToken generates a JWT token for a user
 func (s *AuthService) GenerateToken(userID string) (string, error) {
-	return middleware.GenerateToken(userID)
+	claims := &jwt.RegisteredClaims{
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
+		NotBefore: jwt.NewNumericDate(time.Now()),
+		Subject:   userID,
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(s.jwtSecret)
 }
 
 // Login authenticates a user and returns a JWT token
@@ -77,7 +89,7 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 	}
 
 	// Generate token
-	token, err := middleware.GenerateToken(user.ID.String())
+	token, err := s.GenerateToken(user.ID.String())
 	if err != nil {
 		return "", err
 	}
@@ -113,14 +125,27 @@ func (s *AuthService) Register(ctx context.Context, username, password string) (
 }
 
 func (s *AuthService) ValidateToken(ctx context.Context, token string) (uuid.UUID, error) {
-	// Validate token
-	claims, err := middleware.ValidateToken(token)
+	// Parse and validate token
+	parsedToken, err := jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+		return s.jwtSecret, nil
+	})
+
 	if err != nil {
 		return uuid.Nil, err
 	}
 
+	if !parsedToken.Valid {
+		return uuid.Nil, errors.New("invalid token")
+	}
+
+	// Get claims
+	claims, ok := parsedToken.Claims.(jwt.RegisteredClaims)
+	if !ok {
+		return uuid.Nil, errors.New("invalid token claims")
+	}
+
 	// Parse user ID from claims
-	userID, err := uuid.Parse(claims.UserID)
+	userID, err := uuid.Parse(claims.Subject)
 	if err != nil {
 		return uuid.Nil, err
 	}

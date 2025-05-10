@@ -13,6 +13,7 @@ import (
 	"rtcs/internal/repository"
 	"rtcs/internal/service"
 	"rtcs/internal/transport"
+	httptransport "rtcs/internal/transport/http"
 	"strings"
 	"syscall"
 	"time"
@@ -50,8 +51,8 @@ func main() {
 
 	// Initialize repositories
 	userRepo := repository.NewUserRepository(db)
-	messageRepo := repository.NewMessageRepository(db)
 	chatRepo := repository.NewChatRepository(db)
+	messageRepo := repository.NewMessageRepository(db)
 	log.Printf("Repositories initialized")
 
 	// Connect to Redis
@@ -70,67 +71,52 @@ func main() {
 	log.Printf("Connected to Redis")
 
 	// Initialize services
-	authService := service.NewAuthService(userRepo)
-	messageService := service.NewMessageService(messageRepo, messageCache)
+	authService := service.NewAuthService(userRepo, cfg.JWTSecret)
 	chatService := service.NewChatService(chatRepo)
-	statusService := service.NewStatusService(rdb) // Initialize status service
+	messageService := service.NewMessageService(messageRepo, messageCache)
+	statusService := service.NewStatusService(rdb)
 	profileService := service.NewProfileService(userRepo)
 	log.Printf("Services initialized")
 
 	// Initialize handlers
 	authHandler := transport.NewAuthHandler(authService)
 	profileHandler := transport.NewProfileHandler(profileService)
-	messageHandler := transport.NewMessageHandler(messageService)
 	chatHandler := transport.NewChatHandler(chatService)
-	oauthHandler := transport.NewOAuthHandler(oauthCfg, authService)
+	messageHandler := transport.NewMessageHandler(messageService)
+	oauthHandler := httptransport.NewOAuthHandler(oauthCfg, authService)
 
 	// Create router
 	router := mux.NewRouter()
 
-	// Add middleware first
-	router.Use(middleware.CORS)
-	router.Use(middleware.Logging)
-	router.Use(middleware.Recover)
-
-	// Health check endpoint
-	router.HandleFunc("/health", transport.HealthCheck).Methods("GET")
-
-	// OAuth routes
-	router.HandleFunc("/auth/google/login", oauthHandler.GoogleLogin).Methods("GET")
-	router.HandleFunc("/auth/google/callback", oauthHandler.GoogleCallback).Methods("GET")
-
-	// WebSocket endpoint
-	wsHandler := transport.NewWebSocketHandler(statusService, profileService) // Pass status service
-	router.HandleFunc("/ws", wsHandler.HandleWebSocket)
-	router.HandleFunc("/api/profile", profileHandler.GetMyProfile).Methods("GET")
-	router.HandleFunc("/api/profile", profileHandler.UpdateProfile).Methods("PUT")
-	router.HandleFunc("/api/users/{userId}/profile", profileHandler.GetProfile).Methods("GET")
-	log.Printf("WebSocket endpoint added")
+	// Public routes
+	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}).Methods("GET")
 
 	// Auth routes
 	authRouter := router.PathPrefix("/auth").Subrouter()
 	authRouter.HandleFunc("/register", authHandler.Register).Methods("POST")
 	authRouter.HandleFunc("/login", authHandler.Login).Methods("POST")
+	authRouter.HandleFunc("/google/login", oauthHandler.GoogleLogin).Methods("GET")
+	authRouter.HandleFunc("/google/callback", oauthHandler.GoogleCallback).Methods("GET")
 
-	// Chat routes (protected)
+	// Protected routes
 	chatRouter := router.PathPrefix("/chats").Subrouter()
-	chatRouter.Use(middleware.Auth)
+	chatRouter.Use(middleware.Auth(authService))
 	chatRouter.HandleFunc("", chatHandler.CreateChat).Methods("POST")
 	chatRouter.HandleFunc("", chatHandler.ListChats).Methods("GET")
 	chatRouter.HandleFunc("/{chatId}", chatHandler.GetChat).Methods("GET")
 	chatRouter.HandleFunc("/{chatId}/join", chatHandler.JoinChat).Methods("POST")
 	chatRouter.HandleFunc("/{chatId}/leave", chatHandler.LeaveChat).Methods("POST")
 
-	// Message routes (protected)
 	messageRouter := router.PathPrefix("/messages").Subrouter()
-	messageRouter.Use(middleware.Auth)
+	messageRouter.Use(middleware.Auth(authService))
 	messageRouter.HandleFunc("", messageHandler.Send).Methods("POST")
 	messageRouter.HandleFunc("/{messageId}", messageHandler.DeleteMessage).Methods("DELETE")
 	messageRouter.HandleFunc("/chat/{chatId}", messageHandler.GetChatHistory).Methods("GET")
 
-	// Status routes (new)
 	statusRouter := router.PathPrefix("/status").Subrouter()
-	statusRouter.Use(middleware.Auth)
+	statusRouter.Use(middleware.Auth(authService))
 	statusRouter.HandleFunc("/online", func(w http.ResponseWriter, r *http.Request) {
 		users, err := statusService.GetAllOnlineUsers(r.Context())
 		if err != nil {
@@ -140,6 +126,14 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"online_users":` + fmt.Sprintf("%q", users) + `}`))
 	}).Methods("GET")
+
+	// WebSocket endpoint
+	wsHandler := transport.NewWebSocketHandler(statusService, profileService) // Pass status service
+	router.HandleFunc("/ws", wsHandler.HandleWebSocket)
+	router.HandleFunc("/api/profile", profileHandler.GetMyProfile).Methods("GET")
+	router.HandleFunc("/api/profile", profileHandler.UpdateProfile).Methods("PUT")
+	router.HandleFunc("/api/users/{userId}/profile", profileHandler.GetProfile).Methods("GET")
+	log.Printf("WebSocket endpoint added")
 
 	// Serve static files from the public directory (must be last)
 	staticRouter := router.PathPrefix("/").Subrouter()
