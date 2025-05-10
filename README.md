@@ -218,6 +218,70 @@ Connect to the WebSocket endpoint at `/ws` with a valid JWT token for real-time 
 - Docker multi-stage builds for smaller image size
 - Proper error handling and graceful degradation
 
+## Load Testing Results
+
+The system has been tested under significant load with both HTTP and WebSocket connections:
+
+### HTTP Performance (200 Concurrent Users)
+- Average response time: 90.61ms
+- 95th percentile response time: 245.77ms
+- Request rate: 157 requests/second
+- Error rate: 0.36%
+- Success rate: 100%
+- Total requests: 54,196
+
+### WebSocket Performance (200 Concurrent Connections)
+- Connection success rate: 100%
+- Message success rate: 100%
+- Average connection time: 8.98ms
+- Message throughput: 1,275 messages/second
+- Total messages received: 455,623
+- Total messages sent: 3,271
+- Zero connection drops or timeouts
+
+### Load Test Configuration
+The system was tested using k6 with the following stages:
+1. Ramp up to 50 concurrent users over 30 seconds
+2. Maintain 50 users for 1 minute
+3. Ramp up to 100 users over 30 seconds
+4. Maintain 100 users for 1 minute
+5. Ramp up to 200 users over 30 seconds
+6. Maintain 200 users for 1 minute
+7. Ramp down to 0 over 30 seconds
+
+### Test Scripts
+Load test scripts are available in the `load-tests` directory:
+- `http_test.js` - HTTP API load testing
+- `websocket_test.js` - WebSocket connection and message testing
+
+To run the load tests:
+```bash
+cd load-tests
+k6 run http_test.js    # For HTTP testing
+k6 run websocket_test.js  # For WebSocket testing
+```
+
+## Recent Improvements
+
+1. **Database Schema Enhancement**
+   - Added `updated_at` column to messages table
+   - Improved message tracking and history
+
+2. **Load Testing Infrastructure**
+   - Implemented comprehensive load testing suite
+   - Added custom metrics for error tracking
+   - Improved test user management with unique IDs
+
+3. **Authentication Improvements**
+   - Enhanced token handling in WebSocket connections
+   - Improved user registration and login flow
+   - Better error handling for authentication failures
+
+4. **Performance Optimizations**
+   - Optimized WebSocket connection handling
+   - Improved message broadcasting efficiency
+   - Enhanced database query performance
+
 ## Contributing
 
 1. Fork the repository
