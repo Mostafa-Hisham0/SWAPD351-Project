@@ -49,3 +49,10 @@ EXPOSE 8080
 
 # Run the application
 CMD ["./main"] 
+
+# Copy SSL certificates
+COPY certs/server.crt /app/certs/
+COPY certs/server.key /app/certs/
+
+# Expose HTTPS port
+EXPOSE 8443
