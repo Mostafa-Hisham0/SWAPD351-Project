@@ -2,15 +2,15 @@ module rtcs
 
 go 1.23.0
 
-toolchain go1.23.6
+toolchain go1.24.0
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.0
-	github.com/golang-jwt/jwt/v5 v5.2.2
+	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.3
-	github.com/redis/go-redis/v9 v9.7.3
+	github.com/redis/go-redis/v9 v9.5.1
 	golang.org/x/crypto v0.37.0
 	golang.org/x/oauth2 v0.30.0
 	golang.org/x/time v0.11.0
