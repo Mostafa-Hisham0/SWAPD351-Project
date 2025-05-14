@@ -301,3 +301,123 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ---
 
 *This Real-Time Chat System was developed as part of SWAPD351 course project.*
+
+## Testing
+
+The project includes comprehensive testing across multiple levels:
+
+### Unit Tests
+
+Unit tests focus on testing individual components in isolation. They are located in the `tests/unit` directory and use mocks to simulate dependencies.
+
+To run unit tests:
+```bash
+make test-unit
+```
+
+### Integration Tests
+
+Integration tests verify that different components work together correctly. They are located in the `tests/integration` directory and use test containers to spin up real dependencies.
+
+To run integration tests:
+```bash
+make test-integration
+```
+
+### Contract Tests
+
+Contract tests ensure that the API contracts between the client and server are maintained. They use Pact to define and verify these contracts. The tests are located in:
+
+- Consumer tests: `tests/contract/consumer`
+- Provider tests: `tests/contract/provider`
+
+To run contract tests:
+```bash
+make test-contract
+```
+
+### Load Tests
+
+Load tests simulate real-world usage patterns and verify system performance under load. They use k6 to generate load and measure performance metrics. The test scenarios are located in `tests/load/scenarios`.
+
+To run load tests:
+```bash
+make test-load
+```
+
+## Test Dependencies
+
+The project uses several testing tools:
+
+- `testify`: For assertions and test utilities
+- `gomock`: For generating and using mocks
+- `testcontainers-go`: For managing test containers
+- `pact-go`: For contract testing
+- `k6`: For load testing
+
+To install all test dependencies:
+```bash
+make deps
+```
+
+## Generating Mocks
+
+The project uses mocks for unit testing. To generate mocks:
+```bash
+make generate
+```
+
+## Cleaning Up
+
+To clean up test artifacts:
+```bash
+make clean
+```
+
+## Running All Tests
+
+To run all tests:
+```bash
+make test
+```
+
+## Test Coverage
+
+The project aims for high test coverage. You can generate a coverage report:
+```bash
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out
+```
+
+## Continuous Integration
+
+The tests are integrated into the CI pipeline and run automatically on every push to the main branch. The pipeline includes:
+
+1. Running unit tests
+2. Running integration tests
+3. Running contract tests
+4. Running load tests
+5. Generating and uploading coverage reports
+
+## Best Practices
+
+When writing tests, follow these best practices:
+
+1. Use descriptive test names that explain the behavior being tested
+2. Follow the Arrange-Act-Assert pattern
+3. Keep tests focused and test one thing at a time
+4. Use table-driven tests for testing multiple scenarios
+5. Mock external dependencies to keep tests fast and reliable
+6. Use test containers for integration tests
+7. Write contract tests for all API endpoints
+8. Include load tests for performance-critical paths
+
+## Troubleshooting
+
+If you encounter issues with the tests:
+
+1. Make sure all dependencies are installed: `make deps`
+2. Check that Docker is running (required for test containers)
+3. Verify that the database is accessible
+4. Check the test logs for detailed error messages
+5. Run tests with verbose output: `go test -v ./...`

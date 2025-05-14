@@ -13,11 +13,11 @@ import (
 
 // AuthService handles user authentication
 type AuthService struct {
-	userRepo *repository.UserRepository
+	userRepo repository.UserRepository
 }
 
 // NewAuthService creates a new authentication service
-func NewAuthService(userRepo *repository.UserRepository) *AuthService {
+func NewAuthService(userRepo repository.UserRepository) *AuthService {
 	return &AuthService{
 		userRepo: userRepo,
 	}
