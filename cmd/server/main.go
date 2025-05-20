@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -37,6 +38,13 @@ func main() {
 	db, err := connectDB(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	// Set DB connection pool limits
+	sqlDB, err := db.DB()
+	if err == nil {
+		sqlDB.SetMaxOpenConns(50)
+		sqlDB.SetMaxIdleConns(10)
+		sqlDB.SetConnMaxLifetime(time.Hour)
 	}
 	log.Printf("Connected to database")
 
@@ -67,18 +75,22 @@ func main() {
 	// Create router
 	router := mux.NewRouter()
 
+	// WebSocket endpoint (register before middleware)
+	wsHandler := transport.NewWebSocketHandler()
+	router.HandleFunc("/ws", wsHandler.HandleWebSocket)
+	log.Printf("WebSocket endpoint added")
+
 	// Add middleware first
 	router.Use(middleware.CORS)
 	router.Use(middleware.Logging)
 	router.Use(middleware.Recover)
+	router.Use(middleware.Metrics)
 
 	// Health check endpoint
 	router.HandleFunc("/health", transport.HealthCheck).Methods("GET")
 
-	// WebSocket endpoint
-	wsHandler := transport.NewWebSocketHandler()
-	router.HandleFunc("/ws", wsHandler.HandleWebSocket)
-	log.Printf("WebSocket endpoint added")
+	// Metrics endpoint
+	router.Handle("/metrics", promhttp.Handler())
 
 	// Auth routes
 	authRouter := router.PathPrefix("/auth").Subrouter()

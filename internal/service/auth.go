@@ -38,7 +38,7 @@ type LoginResponse struct {
 func (s *AuthService) Login(ctx context.Context, username, password string) (string, error) {
 	// Get user by username
 	user, err := s.userRepo.GetByUsername(ctx, username)
-	if err != nil {
+	if err != nil || user == nil {
 		return "", errors.New("invalid credentials")
 	}
 

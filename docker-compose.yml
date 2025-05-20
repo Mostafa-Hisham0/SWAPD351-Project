@@ -5,6 +5,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres123
       POSTGRES_DB: rtcs
+      POSTGRES_MAX_CONNECTIONS: 300
     ports:
       - "5432:5432"
     volumes:
@@ -85,6 +86,7 @@ services:
       - discovery.type=single-node
       - bootstrap.memory_lock=true
       - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=StrongP@ssw0rd2024!
     ports:
       - "9200:9200"
       - "9600:9600"
